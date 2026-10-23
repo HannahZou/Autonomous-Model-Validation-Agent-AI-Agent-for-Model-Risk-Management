@@ -70,6 +70,8 @@ class MarketVaRSpec(BaseModel):
     assets: list[str] = Field(min_length=1)
     weights: dict[str, float]
     var: VaRConfig = Field(default_factory=VaRConfig)
+    # Hypothetical one-day shocks to asset prices, e.g. {"Equity crash": {"EQ_US": -0.10}}
+    stress_scenarios: dict[str, dict[str, float]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _weights_match_assets(self) -> "MarketVaRSpec":
@@ -79,6 +81,10 @@ class MarketVaRSpec(BaseModel):
             raise ValueError(
                 f"weights must cover exactly the listed assets (missing={sorted(missing)}, extra={sorted(extra)})"
             )
+        for name, shocks in self.stress_scenarios.items():
+            unknown = set(shocks) - set(self.assets)
+            if unknown:
+                raise ValueError(f"stress scenario '{name}' shocks unknown assets: {sorted(unknown)}")
         return self
 
 
@@ -112,7 +118,7 @@ class ModelPackage:
             raise PackageError(f"Manifest is not valid YAML: {exc}") from exc
         # Allow the spec fields to sit at top level of the YAML for readability.
         spec_keys = {"model_type", "data", "target", "features", "id_column", "model",
-                     "feature_ranges", "assets", "weights", "var"}
+                     "feature_ranges", "assets", "weights", "var", "stress_scenarios"}
         raw = dict(raw)
         raw["spec"] = {k: raw.pop(k) for k in list(raw) if k in spec_keys}
         try:

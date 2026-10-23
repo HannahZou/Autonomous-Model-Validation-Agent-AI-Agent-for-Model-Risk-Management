@@ -1,16 +1,16 @@
 {
   "model_form": "logistic_regression",
-  "intercept": 0.473475,
+  "intercept": -2.879845,
   "coefficients": {
-    "age": -0.01698883,
-    "annual_income": -0.39079014,
-    "debt_to_income": 3.13539605,
-    "credit_utilization": 3.58624281,
-    "utilization_6m_avg": 0.09791298,
-    "num_open_accounts": -0.02465903,
-    "delinquencies_2y": 0.75854913,
-    "months_employed": -0.00550905,
-    "loan_amount": -5.05e-06
+    "age": -0.01328134,
+    "annual_income": -0.27758597,
+    "debt_to_income": 9.12759371,
+    "credit_utilization": 1.21455802,
+    "utilization_6m_avg": 2.49093468,
+    "num_open_accounts": 0.00205184,
+    "delinquencies_2y": 0.76856705,
+    "months_employed": -0.00537365,
+    "loan_amount": -8.3e-07
   },
   "imputation": {
     "annual_income": 60500.0

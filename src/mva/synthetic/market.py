@@ -86,6 +86,11 @@ def write_market_package(root: str | Path, seed: int = 11, inject_issues: bool =
         "assets": ASSETS,
         "weights": WEIGHTS,
         "var": {"method": "historical", "confidence": 0.99, "window": 250, "horizon_days": 1},
+        "stress_scenarios": {
+            "Equity crash": {"EQ_US": -0.10, "EQ_EU": -0.12},
+            "Rates sell-off": {"RATES_10Y": -0.03},
+            "Risk-off (equities down, euro down)": {"EQ_US": -0.07, "EQ_EU": -0.09, "FX_EURUSD": -0.04},
+        },
     }
     (root / "model_package.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
     return root

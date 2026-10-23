@@ -22,6 +22,7 @@ class LogitResult:
     se: np.ndarray          # standard errors on the original scale
     loglik: float
     converged: bool
+    cov: np.ndarray | None = None  # covariance of [intercept, coef...] on the original scale
 
     @property
     def z(self) -> np.ndarray:
@@ -58,7 +59,13 @@ def fit_logit(X: np.ndarray, y: np.ndarray, max_iter: int = 100, tol: float = 1e
     coef = beta[1:] / sd
     intercept = beta[0] - np.sum(beta[1:] * mu / sd)
     loglik = float(np.sum(y * np.log(p) + (1 - y) * np.log(1 - p)))
-    return LogitResult(float(intercept), coef, se_std[1:] / sd, loglik, converged)
+    # Linear map from standardised to original parameters, used to carry the covariance across
+    k = X.shape[1]
+    A = np.zeros((k + 1, k + 1))
+    A[0, 0] = 1.0
+    A[0, 1:] = -mu / sd
+    A[1:, 1:] = np.diag(1 / sd)
+    return LogitResult(float(intercept), coef, se_std[1:] / sd, loglik, converged, A @ cov @ A.T)
 
 
 def lr_test(loglik_restricted: float, loglik_full: float, df: int) -> float:

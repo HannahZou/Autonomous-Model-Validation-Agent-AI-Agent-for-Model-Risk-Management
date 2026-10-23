@@ -9,8 +9,10 @@ feature that leaks the outcome (recovery amount is only known after default).
 
 Model (Assumptions and Backtesting agents): the developer added a 6-month
 average utilisation that is almost a copy of current utilisation
-(multicollinearity), and the validation sample comes from a worse vintage
-than the development sample, so the model under-predicts defaults there.
+(multicollinearity), the validation sample comes from a worse vintage than
+the development sample, so the model under-predicts defaults there, and risk
+jumps once debt-to-income exceeds 45% - a threshold effect the linear
+champion cannot capture but a tree-based challenger can.
 """
 
 from __future__ import annotations
@@ -47,7 +49,13 @@ EXPECTED_SIGNS = {
 }
 
 
-def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0, intercept_shift: float = 0.0) -> pd.DataFrame:
+def _sample(
+    n: int,
+    rng: np.random.Generator,
+    utilization_shift: float = 0.0,
+    intercept_shift: float = 0.0,
+    dti_jump: float = 0.0,
+) -> pd.DataFrame:
     age = rng.integers(21, 75, n).astype(float)
     income = np.round(rng.lognormal(mean=11.0, sigma=0.5, size=n), -2)
     dti = np.clip(rng.normal(0.32, 0.12, n), 0.0, 1.2)
@@ -62,6 +70,7 @@ def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0, in
         -3.0
         + intercept_shift
         + 3.0 * (dti - 0.32)
+        + dti_jump * (dti > 0.45)  # risk steps up once debt service exceeds ~45% of income
         + 4.0 * (util - 0.33)
         + 0.70 * delinq
         - 0.006 * (employed - 60)
@@ -91,12 +100,14 @@ def make_credit_data(
     n_train: int = 8000, n_test: int = 3000, seed: int = 7, inject_issues: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rng = np.random.default_rng(seed)
-    train = _sample(n_train, rng)
+    jump = 2.0 if inject_issues else 0.0
+    train = _sample(n_train, rng, dti_jump=jump)
     test = _sample(
         n_test,
         rng,
         utilization_shift=0.10 if inject_issues else 0.0,
         intercept_shift=0.35 if inject_issues else 0.0,  # worse vintage
+        dti_jump=jump,
     )
     test["loan_id"] += n_train
 

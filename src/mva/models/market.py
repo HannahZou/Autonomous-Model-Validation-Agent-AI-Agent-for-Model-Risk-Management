@@ -69,3 +69,54 @@ def exceptions(returns: pd.Series, var: pd.Series) -> pd.DataFrame:
 
 def annualised_vol(returns: pd.Series) -> float:
     return float(returns.std() * np.sqrt(252))
+
+
+# -- challenger VaR models ---------------------------------------------------
+def ewma_sigma(returns: pd.Series, lam: float = 0.94, seed_days: int = 30) -> pd.Series:
+    """RiskMetrics EWMA volatility forecast for each day, using returns up to the day before."""
+    r = returns.to_numpy()
+    var = np.empty(len(r))
+    var[0] = np.var(r[:seed_days]) if len(r) >= 2 else 0.0
+    for t in range(1, len(r)):
+        var[t] = lam * var[t - 1] + (1 - lam) * r[t - 1] ** 2
+    return pd.Series(np.sqrt(var), index=returns.index, name="sigma")
+
+
+def ewma_var(returns: pd.Series, confidence: float, lam: float = 0.94, warmup: int = 30) -> pd.Series:
+    """Normal VaR with EWMA volatility (zero mean). Reacts quickly to volatility changes."""
+    sigma = ewma_sigma(returns, lam)
+    var = -stats.norm.ppf(1 - confidence) * sigma
+    var.iloc[:warmup] = np.nan
+    return var.rename("var")
+
+
+def fhs_var(returns: pd.Series, window: int, confidence: float, lam: float = 0.94) -> pd.Series:
+    """Filtered historical simulation (Barone-Adesi et al.): historical quantile of
+    EWMA-standardised returns, rescaled by today's volatility forecast."""
+    sigma = ewma_sigma(returns, lam)
+    z = returns / sigma.replace(0, np.nan)
+    q = z.rolling(window).quantile(1 - confidence).shift(1)
+    return (-q * sigma).rename("var")
+
+
+def latest_var(returns: pd.Series, window: int, confidence: float, method: str) -> float:
+    """VaR forecast for the next (unobserved) day from the last `window` returns."""
+    w = returns.iloc[-window:]
+    alpha = 1 - confidence
+    if method == "historical":
+        return float(-np.quantile(w, alpha))
+    return float(-(w.mean() + stats.norm.ppf(alpha) * w.std()))
+
+
+def expected_shortfall(returns: pd.Series, window: int, confidence: float) -> float:
+    """Historical expected shortfall: average loss beyond the VaR quantile."""
+    w = returns.iloc[-window:].to_numpy()
+    q = np.quantile(w, 1 - confidence)
+    return float(-w[w <= q].mean())
+
+
+def quantile_loss(hits: pd.DataFrame, confidence: float) -> float:
+    """Average tick (pinball) loss of the VaR forecasts; lower is better (Giacomini & Komunjer, 2005)."""
+    alpha = 1 - confidence
+    r, q = hits["return"].to_numpy(), -hits["var"].to_numpy()
+    return float(np.mean((alpha - (r < q)) * (r - q)))

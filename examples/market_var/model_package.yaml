@@ -31,3 +31,13 @@ var:
   confidence: 0.99
   window: 250
   horizon_days: 1
+stress_scenarios:
+  Equity crash:
+    EQ_US: -0.1
+    EQ_EU: -0.12
+  Rates sell-off:
+    RATES_10Y: -0.03
+  Risk-off (equities down, euro down):
+    EQ_US: -0.07
+    EQ_EU: -0.09
+    FX_EURUSD: -0.04

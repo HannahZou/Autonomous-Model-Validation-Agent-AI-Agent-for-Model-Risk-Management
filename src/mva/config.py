@@ -70,6 +70,38 @@ class BacktestThresholds(StatTestThresholds):
 
 
 @dataclass(frozen=True)
+class ChallengerThresholds(StatTestThresholds):
+    # Credit: a challenger beating the champion's validation AUC by this much,
+    # with a paired-bootstrap 95% interval that excludes zero, is a finding
+    auc_gap_medium: float = 0.01
+    auc_gap_high: float = 0.03
+    bootstrap_samples: int = 300
+    rank_correlation_low: float = 0.80
+    # Market: every challenger's current VaR exceeding the champion's by this ratio
+    var_gap_medium: float = 1.25
+    var_gap_high: float = 1.50
+    ewma_lambda: float = 0.94
+    seed: int = 0
+
+
+@dataclass(frozen=True)
+class SensitivityThresholds:
+    # Credit
+    shock_sd: float = 1.0              # size of one-at-a-time feature shocks
+    adverse_sd: float = 0.5            # joint adverse move of every feature with an expected sign
+    driver_concentration: float = 0.50  # one feature's share of total sensitivity
+    parameter_draws: int = 500
+    parameter_width_low: float = 0.15   # 90% interval width of portfolio PD / mean PD
+    parameter_width_medium: float = 0.25
+    # Market
+    windows: tuple[int, ...] = (125, 250, 500)
+    window_dispersion: float = 0.50     # (max - min) / champion VaR across windows
+    asset_concentration: float = 0.60   # one asset's share of VaR
+    stress_multiple: float = 3.0        # worst loss as a multiple of current VaR
+    seed: int = 0
+
+
+@dataclass(frozen=True)
 class Settings:
     openai_api_key: str | None
     openai_model: str
@@ -78,6 +110,8 @@ class Settings:
     dq: DataQualityThresholds = field(default_factory=DataQualityThresholds)
     assumptions: AssumptionThresholds = field(default_factory=AssumptionThresholds)
     backtest: BacktestThresholds = field(default_factory=BacktestThresholds)
+    challenger: ChallengerThresholds = field(default_factory=ChallengerThresholds)
+    sensitivity: SensitivityThresholds = field(default_factory=SensitivityThresholds)
 
     @property
     def llm_enabled(self) -> bool:

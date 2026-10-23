@@ -15,13 +15,13 @@ It supports two model families out of the box:
 model package (YAML manifest + data)
         │
         ▼
-   Orchestrator ──► Data Quality ──► Assumptions ──► Backtesting ──► Challenger* ──► Sensitivity*
+   Orchestrator ──► Data Quality ──► Assumptions ──► Backtesting ──► Challenger ──► Sensitivity
         │                 │
         │        deterministic checks  →  findings (severity set by thresholds)
         │                 │
         │        LLM narrative layer   →  summary + commentary (cannot change findings)
         ▼
- results.json · summary.md · audit.jsonl          (* = coming in week 3)
+ results.json · summary.md · audit.jsonl
 ```
 
 **Design principles**
@@ -86,8 +86,33 @@ Severity for statistical tests: rejection at 1% is Medium (High where the error 
 
 **Model-level issues planted in the examples**
 
-- *Credit*: the developer added `utilization_6m_avg`, a near-copy of `credit_utilization` (VIF ≈ 36), and the validation sample comes from a worse vintage, so the model under-predicts defaults (15.1% observed vs ≈11% predicted).
+- *Credit*: the developer added `utilization_6m_avg`, a near-copy of `credit_utilization` (VIF ≈ 36), and the validation sample comes from a worse vintage, so the model under-predicts defaults (21.0% observed vs 16.4% predicted). Risk also steps up once debt-to-income exceeds 45%, which the linear model cannot represent (flagged by the linearity test).
 - *VaR*: a stress episode makes the last 60 days about three times as volatile; the 250-day historical VaR lags, giving 16 exceptions against 7.4 expected and a yellow traffic light.
+
+## Week 3: Challenger Benchmarking and Sensitivity Analysis agents
+
+**Challenger Benchmarking agent** (SR 11-7: benchmarking against alternative models)
+
+| | Credit PD | Market VaR |
+|---|---|---|
+| Challengers built by the validator | Gradient boosting, random forest — same features and preprocessing as the champion | EWMA (RiskMetrics, λ = 0.94) and filtered historical simulation |
+| Comparison | Validation AUC with a paired-bootstrap 95% interval for the gap, Brier score, Spearman rank agreement | Exceptions, Kupiec, Christoffersen and traffic light on identical days; quantile (tick) loss; current next-day VaR |
+| Finding when | A challenger beats the champion's AUC by > 0.01 and the interval excludes zero | A challenger is in a better traffic-light zone (or passes Kupiec where the champion fails) **and** has lower quantile loss; or every challenger's current VaR exceeds the champion's by > 25% |
+
+**Sensitivity Analysis agent** (SR 11-7: sensitivity analysis under conceptual soundness)
+
+| Credit PD | Market VaR |
+|---|---|
+| One-at-a-time ±1 robust-SD shocks to each model input; flags a single dominant driver | Current VaR with 125 / 250 / 500-day windows and at 97.5% / 99% / 99.5% confidence; expected shortfall at 97.5% |
+| Joint adverse scenario: every feature with a documented sign moved in its risk-increasing direction; PDs must rise | Historical component VaR by asset; flags concentration |
+| Parameter uncertainty: 500 coefficient draws from the estimated sampling distribution → 90% interval for portfolio PD | Worst historical day and hypothetical scenarios from the manifest (`stress_scenarios`) as multiples of VaR |
+
+**What they find in the examples**
+
+- *Credit*: both tree-based challengers beat the logistic champion on the validation sample (AUC 0.809 vs 0.794, gap +0.015, 95% interval +0.003 to +0.025) because they capture the debt-to-income threshold. Sensitivity analysis also shows the collinearity at work: shocking `utilization_6m_avg` moves PDs twice as much as shocking current utilisation, although they measure the same thing.
+- *VaR*: on the same 739 days the champion has 16 exceptions (yellow zone) while EWMA and FHS have 10 each (green) with lower quantile loss. The worst day in the history, a 20% portfolio loss (4.9× current VaR), is the unadjusted stock split the Data Quality agent flagged.
+
+Thresholds were checked against clean synthetic packages: across 4 clean credit and 12 clean market packages neither agent produces a Medium or High finding, which the test suite enforces.
 
 ## Quick start
 
@@ -106,7 +131,7 @@ Example output:
 
 ```
 Retail Unsecured Loan PD Scorecard (CR-PD-001)
-  Data Quality      8 findings  (0.17s, narrative: template)
+  Data Quality      8 findings  (0.15s, narrative: template)
     DQ-001  High    Conflicting records share an ID in development data
     DQ-002  High    Values outside documented valid ranges in development data
     DQ-003  High    Suspected target leakage
@@ -115,14 +140,18 @@ Retail Unsecured Loan PD Scorecard (CR-PD-001)
     DQ-006  Medium  Duplicate records in development data
     DQ-007  Medium  Extreme outliers in development data
     DQ-008  Medium  Default rate differs materially between samples
-  Assumptions       3 findings  (0.08s, narrative: template)
+  Assumptions       3 findings  (0.07s, narrative: template)
     AS-001  High    Multicollinearity among model features (severe)
     AS-002  Medium  Non-linear relationship with log-odds
     AS-003  Low     Features without statistically significant effect
-  Backtesting       2 findings  (0.06s, narrative: template)
+  Backtesting       2 findings  (0.13s, narrative: template)
     BT-001  High    Model under-predicts defaults
     BT-002  Medium  Predicted PDs do not match observed default rates across risk deciles
-Total: 6 High, 6 Medium, 1 Low  in 0.35s
+  Challenger Benchmarking  2 findings  (5.24s, narrative: template)
+    CH-001  Medium  Gradient boosting challenger outperforms the champion
+    CH-002  Medium  Random forest challenger outperforms the champion
+  Sensitivity Analysis  0 findings  (0.07s, narrative: template)
+Total: 6 High, 8 Medium, 1 Low  in 5.67s
 ```
 
 Each run is saved to `runs/<run_id>/` as `results.json` (machine-readable), `summary.md` (readable findings with recommendations) and `audit.jsonl`.
@@ -131,13 +160,13 @@ Each run is saved to `runs/<run_id>/` as `results.json` (machine-readable), `sum
 
 A package is a folder with `model_package.yaml` and the data it references. See `examples/credit_pd/model_package.yaml` and `examples/market_var/model_package.yaml`. Documentation (purpose, intended use, assumptions, limitations) lives in the manifest so agents can test claims against it.
 
-A credit package also points to `model.json`: the delivered logistic regression as data — intercept, coefficients, the preprocessing applied (imputation → caps → transforms) and the expected sign of each coefficient. A JSON specification is safe to load (no pickles), readable in code review, and mirrors how scorecards are documented. A VaR model is fully described by its `var` block (method, confidence, window, horizon).
+A credit package also points to `model.json`: the delivered logistic regression as data — intercept, coefficients, the preprocessing applied (imputation → caps → transforms) and the expected sign of each coefficient. A JSON specification is safe to load (no pickles), readable in code review, and mirrors how scorecards are documented. A VaR model is fully described by its `var` block (method, confidence, window, horizon); optional `stress_scenarios` define hypothetical one-day price shocks used by the Sensitivity agent.
 
 ## Roadmap
 
 - **Week 1** ✅ Project skeleton, model package format, Data Quality agent, LLM narrative layer, orchestrator, audit log
 - **Week 2** ✅ Model specification in the package, statistics library, Assumptions agent, Backtesting agent
-- **Week 3** Challenger benchmarking (gradient boosting / filtered historical simulation) and Sensitivity analysis (input shocks, stress scenarios, window and confidence sensitivity)
+- **Week 3** ✅ Challenger Benchmarking agent and Sensitivity Analysis agent — all five agents in place
 - **Week 4** Validation report (Word/PDF), Streamlit human-in-the-loop review (accept / edit / reject findings), turnaround-time benchmark
 
 ## Project layout
@@ -150,7 +179,7 @@ src/mva/
   llm.py             narrative layer (OpenAI structured outputs + template fallback)
   orchestrator.py    runs agents, writes results and audit trail
   stats.py           statistical tests (logit MLE, VIF, Hosmer-Lemeshow, Kupiec, Christoffersen, ...)
-  models/            the models under validation: PD scoring, portfolio returns, rolling VaR
+  models/            the models under validation (PD scoring, rolling VaR) and challenger VaR models
   agents/            one module per validation agent
   checks/            deterministic tests used by the agents
   synthetic/         synthetic credit and market data generators
