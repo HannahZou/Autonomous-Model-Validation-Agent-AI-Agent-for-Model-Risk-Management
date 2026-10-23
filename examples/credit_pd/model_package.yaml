@@ -1,0 +1,41 @@
+model_id: CR-PD-001
+name: Retail Unsecured Loan PD Scorecard
+version: '2.3'
+model_type: credit_pd
+documentation:
+  purpose: Estimate 12-month probability of default for unsecured personal loan applicants.
+  intended_use: Application approval cut-offs and risk-based pricing; input to CECL
+    PD estimates.
+  owner: Retail Credit Risk Modeling
+  assumptions:
+  - Log-odds of default are linear in the (transformed) features.
+  - Development sample is representative of the current applicant population.
+  - Features are available at application time.
+  - 'Default definition: 90+ days past due within 12 months of origination.'
+  limitations:
+  - Not validated for small-business or secured lending.
+data:
+  train: train.csv
+  test: test.csv
+target: default_flag
+id_column: loan_id
+features:
+- age
+- annual_income
+- debt_to_income
+- credit_utilization
+- num_open_accounts
+- delinquencies_2y
+- months_employed
+- loan_amount
+- recovery_amount
+feature_ranges:
+  age:
+  - 18
+  - 100
+  debt_to_income:
+  - 0
+  - 2
+  credit_utilization:
+  - 0
+  - 1

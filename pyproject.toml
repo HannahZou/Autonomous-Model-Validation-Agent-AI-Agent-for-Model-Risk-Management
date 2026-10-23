@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-validation-agent"
+version = "0.1.0"
+description = "Multi-agent framework that automates SR 11-7 model validation for credit PD and market risk VaR models."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Yanhang (Hannah) Zou" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "openai>=1.60",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+mva = "mva.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

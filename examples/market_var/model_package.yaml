@@ -1,0 +1,33 @@
+model_id: MR-VAR-004
+name: Trading Book 1-Day 99% Historical VaR
+version: '1.4'
+model_type: market_var
+documentation:
+  purpose: Daily 1-day 99% Value-at-Risk for the multi-asset trading book.
+  intended_use: Daily risk limits monitoring and internal capital reporting.
+  owner: Market Risk Analytics
+  assumptions:
+  - The past 250 trading days are representative of next-day risk.
+  - Daily returns are independent across days.
+  - Portfolio weights are constant over the 1-day horizon.
+  - Price history is adjusted for corporate actions.
+  limitations:
+  - Does not capture intraday liquidity risk.
+data:
+  prices: prices.csv
+  date_column: date
+assets:
+- EQ_US
+- EQ_EU
+- RATES_10Y
+- FX_EURUSD
+weights:
+  EQ_US: 0.4
+  EQ_EU: 0.25
+  RATES_10Y: 0.25
+  FX_EURUSD: 0.1
+var:
+  method: historical
+  confidence: 0.99
+  window: 250
+  horizon_days: 1
