@@ -53,6 +53,8 @@ class AgentReport(BaseModel):
     summary: str = ""
     narrative_source: str = "template"  # template | llm
     error: str | None = None
+    # Data files written alongside results.json (e.g. the VaR backtest series used for charts)
+    artifacts: list[str] = Field(default_factory=list)
     started_at: datetime
     finished_at: datetime
 

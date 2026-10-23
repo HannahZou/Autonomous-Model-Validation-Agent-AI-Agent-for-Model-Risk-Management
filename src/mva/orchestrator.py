@@ -2,34 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from mva.agents import DEFAULT_AGENTS, BaseAgent
+from mva.audit import AuditLog, now
 from mva.config import Settings
 from mva.llm import NarrativeWriter, OpenAINarrativeWriter, TemplateNarrativeWriter
 from mva.package import ModelPackage
 from mva.schemas import ValidationRun
 
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-class AuditLog:
-    """Append-only JSONL trail of everything the system did during a run."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-    def event(self, kind: str, **data: Any) -> None:
-        record = {"ts": _now().isoformat(), "event": kind, **data}
-        with self.path.open("a") as fh:
-            fh.write(json.dumps(record, default=str) + "\n")
+_now = now
 
 
 def default_writer(settings: Settings) -> NarrativeWriter:
@@ -61,10 +46,17 @@ class Orchestrator:
         audit.event("run_started", run_id=run_id, model_id=m.model_id, model_type=package.model_type,
                     package=str(Path(package_path).resolve()), narrative=self.writer.source)
 
+        write_manifest_snapshot(package, Path(package_path), out_dir)
+
         for cls in self.agent_classes:
             agent = cls(self.settings, self.writer)
             audit.event("agent_started", agent=agent.name)
             report = agent.run(package)
+            for name, table in agent.artifacts.items():
+                rel = f"artifacts/{agent.code}_{name}.csv"
+                (out_dir / "artifacts").mkdir(exist_ok=True)
+                table.to_csv(out_dir / rel, index=False)
+                report.artifacts.append(rel)
             run.agent_reports.append(report)
             audit.event(
                 "agent_finished", agent=agent.name, status=report.status, error=report.error,
@@ -80,8 +72,22 @@ class Orchestrator:
         return run, out_dir
 
 
+def write_manifest_snapshot(package: ModelPackage, package_path: Path, out_dir: Path) -> None:
+    """Record exactly what was validated: the manifest and a SHA-256 of every file in the package."""
+    files = {
+        str(f.relative_to(package.root)): hashlib.sha256(f.read_bytes()).hexdigest()
+        for f in sorted(package.root.iterdir()) if f.is_file()
+    }
+    snapshot = {
+        "package_path": str(package_path.resolve()),
+        "manifest": package.manifest.model_dump(mode="json"),
+        "file_sha256": files,
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(snapshot, indent=2))
+
+
 def render_summary(run: ValidationRun) -> str:
-    """Interim markdown summary. The full validation report arrives in Week 4."""
+    """Quick-look markdown summary of the automated run (the reviewed report is built by mva.report)."""
     c = run.severity_counts()
     lines = [
         f"# Validation run {run.run_id}",
@@ -104,6 +110,6 @@ def render_summary(run: ValidationRun) -> str:
             for f in r.findings:
                 lines += [f"### {f.finding_id} · {f.title} ({f.severity.value})", "", f.description, ""]
                 if f.commentary:
-                    lines += [f"*Validator commentary:* {f.commentary}", ""]
+                    lines += [f"*AI commentary (for the reviewer):* {f.commentary}", ""]
                 lines += [f"**Recommendation:** {f.recommendation}", ""]
     return "\n".join(lines)

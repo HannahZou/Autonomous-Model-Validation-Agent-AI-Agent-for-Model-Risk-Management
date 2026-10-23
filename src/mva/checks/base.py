@@ -23,3 +23,8 @@ class Issue:
 def rnd(x: float, n: int = 4) -> float:
     """Round for evidence so reports stay readable and JSON-safe."""
     return float(round(float(x), n))
+
+
+def fmt_p(p: float) -> str:
+    """Readable p-value: never prints a misleading 'p = 0'."""
+    return "< 0.0001" if p < 1e-4 else f"{p:.4f}" if p < 0.01 else f"{p:.3f}"

@@ -102,6 +102,12 @@ class SensitivityThresholds:
 
 
 @dataclass(frozen=True)
+class ReviewPolicy:
+    # Days allowed to remediate an accepted finding, by severity
+    remediation_days: tuple[tuple[str, int], ...] = (("High", 90), ("Medium", 180), ("Low", 365))
+
+
+@dataclass(frozen=True)
 class Settings:
     openai_api_key: str | None
     openai_model: str
@@ -112,6 +118,7 @@ class Settings:
     backtest: BacktestThresholds = field(default_factory=BacktestThresholds)
     challenger: ChallengerThresholds = field(default_factory=ChallengerThresholds)
     sensitivity: SensitivityThresholds = field(default_factory=SensitivityThresholds)
+    review: ReviewPolicy = field(default_factory=ReviewPolicy)
 
     @property
     def llm_enabled(self) -> bool:

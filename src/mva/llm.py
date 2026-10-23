@@ -120,3 +120,83 @@ def apply_narrative(findings: list[Finding], narrative: AgentNarrative) -> list[
     if unknown:
         log.warning("Discarded commentary for unknown finding IDs: %s", unknown)
     return unknown
+
+
+# -- executive summary (written after human review) ----------------------------
+class ExecutiveSummary(BaseModel):
+    summary: str
+    key_finding_ids: list[str]
+
+
+EXEC_SYSTEM_PROMPT = """You are the lead model validator writing the executive summary of a \
+validation report under SR 11-7, after a human reviewer has accepted, edited or rejected each \
+automated finding.
+
+Write `summary`: one paragraph of 4-6 sentences for senior management stating the overall rating \
+and what it means for use of the model, the most material issues and their business impact, and \
+the main remediation themes. List in `key_finding_ids` the 1-5 finding IDs the summary relies on.
+
+Rules: use only the facts provided; do not invent numbers; do not change any severity or the \
+overall rating; refer only to finding IDs that appear in the input; plain, neutral language."""
+
+
+class ExecutiveSummaryWriter(Protocol):
+    source: str
+
+    def write(self, payload: dict[str, Any]) -> ExecutiveSummary: ...
+
+
+class TemplateExecutiveSummaryWriter:
+    source = "template"
+
+    def write(self, payload: dict[str, Any]) -> ExecutiveSummary:
+        findings = payload["findings"]
+        counts = {s: sum(f["severity"] == s for f in findings) for s in ("High", "Medium", "Low")}
+        text = (
+            f"The validation of {payload['model']['name']} concludes with an overall rating of "
+            f"{payload['rating']}. {payload['rating_meaning']} After review, {len(findings)} finding(s) were retained: "
+            f"{counts['High']} High, {counts['Medium']} Medium and {counts['Low']} Low severity."
+        )
+        top = [f for f in findings if f["severity"] == "High"][:3] or findings[:3]
+        if top:
+            text += " The most material are " + "; ".join(f"{f['title']} ({f['finding_id']})" for f in top) + "."
+        return ExecutiveSummary(summary=text, key_finding_ids=[f["finding_id"] for f in top])
+
+
+class OpenAIExecutiveSummaryWriter:
+    source = "llm"
+
+    def __init__(self, model: str, api_key: str | None = None, client: Any | None = None):
+        self.model = model
+        if client is None:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+        self.client = client
+
+    def write(self, payload: dict[str, Any]) -> ExecutiveSummary:
+        response = self.client.responses.parse(
+            model=self.model,
+            input=[
+                {"role": "system", "content": EXEC_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(payload, default=str)},
+            ],
+            text_format=ExecutiveSummary,
+        )
+        parsed = response.output_parsed
+        if parsed is None:
+            raise ValueError("model returned no parsed output")
+        return parsed
+
+
+def write_executive_summary(writer: ExecutiveSummaryWriter, payload: dict[str, Any]) -> tuple[ExecutiveSummary, str, str | None]:
+    """Run the writer with guardrails; returns (summary, source, error)."""
+    valid = {f["finding_id"] for f in payload["findings"]}
+    try:
+        result = writer.write(payload)
+        source, error = writer.source, None
+    except Exception as exc:  # never block the report on the API
+        log.warning("Executive summary generation failed (%s); using template", exc)
+        result, source, error = TemplateExecutiveSummaryWriter().write(payload), "template", f"{type(exc).__name__}: {exc}"
+    result.key_finding_ids = [i for i in result.key_finding_ids if i in valid]
+    return result, source, error

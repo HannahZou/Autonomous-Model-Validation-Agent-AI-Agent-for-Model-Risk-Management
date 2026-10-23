@@ -47,6 +47,7 @@ class BacktestingAgent(BaseAgent):
         if hits.empty:
             raise PackageError(f"not enough history to backtest a {cfg.window}-day VaR")
         issues, metrics = B.var_backtest(hits, cfg.confidence, th)
+        self.artifacts["var_backtest"] = hits.rename_axis("date").reset_index()
         metrics["data_treatment"] = notes
         metrics["var_config"] = cfg.model_dump()
         if cfg.horizon_days > 1:

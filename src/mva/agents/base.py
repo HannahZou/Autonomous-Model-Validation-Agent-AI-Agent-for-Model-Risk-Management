@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
 
+import pandas as pd
+
 from mva.checks.base import Issue
 from mva.config import Settings
 from mva.llm import NarrativeWriter, TemplateNarrativeWriter, apply_narrative
@@ -32,6 +34,8 @@ class BaseAgent(ABC):
         self.settings = settings
         self.writer = writer or TemplateNarrativeWriter()
         self.fallback = TemplateNarrativeWriter()
+        # Tables an agent wants saved with the run (for charts and audit), keyed by short name
+        self.artifacts: dict[str, pd.DataFrame] = {}
 
     @abstractmethod
     def run_checks(self, package: ModelPackage) -> tuple[list[Issue], dict[str, Any]]:
@@ -39,6 +43,7 @@ class BaseAgent(ABC):
 
     def run(self, package: ModelPackage) -> AgentReport:
         started = _now()
+        self.artifacts = {}
         try:
             issues, metrics = self.run_checks(package)
         except Exception as exc:  # an agent failure must not stop the whole validation

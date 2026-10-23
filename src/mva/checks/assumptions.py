@@ -8,12 +8,17 @@ from scipy import stats as sps
 from scipy.special import expit
 
 from mva import stats
-from mva.checks.base import Issue, rnd
+from mva.checks.base import Issue, fmt_p, rnd
 from mva.config import AssumptionThresholds
 from mva.models.credit import CreditModelSpec
 from mva.schemas import Severity, SR117Pillar
 
 CS = SR117Pillar.CONCEPTUAL_SOUNDNESS
+
+
+def _p(p: float) -> str:
+    text = fmt_p(p)
+    return text if text.startswith("<") else f"= {text}"
 
 
 def _p_severity(p: float, th: AssumptionThresholds, material: Severity = Severity.MEDIUM) -> Severity | None:
@@ -198,7 +203,7 @@ def credit_linearity(model: CreditModelSpec, X: pd.DataFrame, y: np.ndarray, bas
                     pillar=CS,
                     description=(
                         "Adding a squared term significantly improves fit (Bonferroni-adjusted) for: "
-                        + ", ".join(f"{f} (adjusted p = {p:.2g})" for f, p in cols.items())
+                        + ", ".join(f"{f} (adjusted p {_p(p)})" for f, p in cols.items())
                         + ". This contradicts the documented assumption that log-odds are linear in the features."
                     ),
                     recommendation="Consider binning (WoE), a transformation or a spline for these features.",
@@ -228,7 +233,7 @@ def var_independence(returns: pd.Series, th: AssumptionThresholds):
                 severity=sev,
                 pillar=CS,
                 description=(
-                    f"Ljung-Box test on returns ({th.ljung_box_lags} lags): Q = {q_r:.1f}, p = {p_r:.4f}. "
+                    f"Ljung-Box test on returns ({th.ljung_box_lags} lags): Q = {q_r:.1f}, p {_p(p_r)}. "
                     "The model assumes daily returns are independent."
                 ),
                 recommendation="Assess the impact on VaR, and on any square-root-of-time scaling to longer horizons.",
@@ -244,7 +249,7 @@ def var_independence(returns: pd.Series, th: AssumptionThresholds):
                 severity=sev,
                 pillar=CS,
                 description=(
-                    f"Ljung-Box test on squared returns: Q = {q_s:.1f}, p = {p_s:.4f}. Volatility is persistent, "
+                    f"Ljung-Box test on squared returns: Q = {q_s:.1f}, p {_p(p_s)}. Volatility is persistent, "
                     "so an equally weighted historical window reacts slowly when market conditions change."
                 ),
                 recommendation=(

@@ -21,8 +21,18 @@ model package (YAML manifest + data)
         │                 │
         │        LLM narrative layer   →  summary + commentary (cannot change findings)
         ▼
- results.json · summary.md · audit.jsonl
+ results.json · summary.md · audit.jsonl · manifest.json (SHA-256 of every input file)
+        │
+        ▼
+ Human review (Streamlit app)  →  accept / edit / reject each finding, with rationale  →  sign-off
+        │
+        ▼
+ Validation report (.docx / .pdf): rating, findings, charts, rejected findings, audit trail
 ```
+
+**Sample reports** (from the synthetic examples, with an illustrative demo review):
+[credit PD](docs/sample_reports/validation_report_credit_pd.pdf) ·
+[market VaR](docs/sample_reports/validation_report_market_var.pdf)
 
 **Design principles**
 
@@ -30,7 +40,8 @@ model package (YAML manifest + data)
 2. **The LLM writes, it doesn't judge.** OpenAI structured outputs (Pydantic schemas) turn findings into report prose. Commentary for finding IDs the model invents is discarded, and severity and evidence cannot be altered.
 3. **Only aggregates leave the machine.** The API receives finding statistics and model documentation, never row-level data.
 4. **Never blocked by the API.** If the call fails or no key is set, a deterministic template narrative is used and the error is recorded.
-5. **Everything is auditable.** Each run writes an append-only `audit.jsonl` with timings, so turnaround time is measured, not claimed.
+5. **A human decides.** Agents only *propose* findings. A validator accepts, edits or rejects each one; rejections and edits need a written rationale, nothing can be signed off while anything is pending, and nothing changes after sign-off.
+6. **Everything is auditable.** Each run writes an append-only `audit.jsonl` — agent timings, every review decision with reviewer and rationale, sign-off — so turnaround time is measured, not claimed.
 
 ## Week 1: Data Quality agent
 
@@ -114,6 +125,30 @@ Severity for statistical tests: rejection at 1% is Medium (High where the error 
 
 Thresholds were checked against clean synthetic packages: across 4 clean credit and 12 clean market packages neither agent produces a Medium or High finding, which the test suite enforces.
 
+## Week 4: Human review, validation report and turnaround
+
+**Review workflow** (`src/mva/review.py`, used by the app)
+
+- Every finding starts *pending*. The validator can **accept** it (optional note), **edit** it (severity, title, description or recommendation — rationale required) or **reject** it (rationale required), and can reopen a decision until sign-off.
+- **Sign-off** requires a reviewer name and zero pending findings (and an explanation if any agent failed). It fixes the overall rating and locks the review.
+- **Overall rating** from the reviewed findings: any High → *Unsatisfactory*; any Medium → *Satisfactory with findings*; otherwise *Satisfactory*.
+- **Remediation due dates** from the sign-off date: High 90 days, Medium 180, Low 365 (configurable in `ReviewPolicy`).
+
+**Streamlit app** (`app/streamlit_app.py`): run a validation or open an earlier run, filter findings by area / severity / review status, accept / edit / reject in place, sign off, and download the report. A *Run details* tab shows each agent's metrics, the turnaround measures and the audit trail. The app is a thin layer over `review.py`, so it cannot bypass the review rules; the test suite drives it through a stand-in for the Streamlit API.
+
+**Validation report** (`src/mva/report/`): a Word document — cover page, executive summary with overall rating, model and scope (purpose, documented assumptions and limitations, SR 11-7 coverage, SHA-256 of the inputs), findings summary with severity and due dates, detailed findings by area with charts (calibration by decile and challenger AUC for credit; VaR backtest and challenger exceptions for market risk), and appendices for rejected findings, the audit trail and turnaround, and the limitations of the validation. Before sign-off it is marked **DRAFT**. PDF conversion uses LibreOffice when installed.
+
+The executive summary is written by the LLM *after* review, from the reviewed findings only (template fallback; finding IDs it cites are checked). The report labels every AI-written passage as such.
+
+**Turnaround** is read from the audit trail: automated analysis time per agent, active review time (first to last decision), and elapsed time from run start to sign-off. `mva benchmark` times the automated pipeline (median of repeated runs, no API calls):
+
+| Package | Automated run (median of 3) | Slowest agent |
+|---|---|---|
+| Credit PD (8,160 + 3,000 loans) | 4.8 s | Challenger Benchmarking, 4.5 s (tree models + 300 bootstrap resamples) |
+| Market VaR (4 assets, ~1,000 days) | 0.06 s | — |
+
+The analysis itself takes seconds; the human review is what remains, and it is now measured per run. Comparing against a manual validation baseline requires recording that baseline in your own process.
+
 ## Quick start
 
 ```bash
@@ -125,6 +160,11 @@ mva make-examples               # writes examples/credit_pd and examples/market_
 mva validate examples/credit_pd --no-llm
 mva validate examples/market_var          # uses OpenAI when a key is set
 pytest
+
+streamlit run app/streamlit_app.py         # review, sign off, download the report
+mva report runs/<run_id> --pdf             # or build the report from the command line
+mva turnaround runs/<run_id>
+mva benchmark examples/credit_pd examples/market_var --repeat 3
 ```
 
 Example output:
@@ -154,7 +194,7 @@ Retail Unsecured Loan PD Scorecard (CR-PD-001)
 Total: 6 High, 8 Medium, 1 Low  in 5.67s
 ```
 
-Each run is saved to `runs/<run_id>/` as `results.json` (machine-readable), `summary.md` (readable findings with recommendations) and `audit.jsonl`.
+Each run is saved to `runs/<run_id>/` as `results.json` (machine-readable), `summary.md` (quick-look findings), `manifest.json` (what was validated, with file hashes), `audit.jsonl`, `artifacts/` (series behind the charts), and after review `review.json` and the report.
 
 ## Model package format
 
@@ -167,7 +207,7 @@ A credit package also points to `model.json`: the delivered logistic regression 
 - **Week 1** ✅ Project skeleton, model package format, Data Quality agent, LLM narrative layer, orchestrator, audit log
 - **Week 2** ✅ Model specification in the package, statistics library, Assumptions agent, Backtesting agent
 - **Week 3** ✅ Challenger Benchmarking agent and Sensitivity Analysis agent — all five agents in place
-- **Week 4** Validation report (Word/PDF), Streamlit human-in-the-loop review (accept / edit / reject findings), turnaround-time benchmark
+- **Week 4** ✅ Human review workflow and sign-off, Streamlit app, Word/PDF validation report with charts, LLM executive summary, turnaround measurement and benchmark
 
 ## Project layout
 
@@ -177,13 +217,20 @@ src/mva/
   schemas.py         Finding, AgentReport, ValidationRun
   package.py         model package manifest and loader
   llm.py             narrative layer (OpenAI structured outputs + template fallback)
-  orchestrator.py    runs agents, writes results and audit trail
+  orchestrator.py    runs agents, writes results, manifest snapshot, artifacts and audit trail
+  audit.py           append-only audit log
+  review.py          human review rules: accept / edit / reject, rating, remediation dates, sign-off
+  turnaround.py      timings from the audit trail
+  report/            Word report builder, charts, PDF conversion
   stats.py           statistical tests (logit MLE, VIF, Hosmer-Lemeshow, Kupiec, Christoffersen, ...)
   models/            the models under validation (PD scoring, rolling VaR) and challenger VaR models
   agents/            one module per validation agent
   checks/            deterministic tests used by the agents
   synthetic/         synthetic credit and market data generators
-tests/               pytest suite (OpenAI is mocked)
+app/streamlit_app.py review app
+scripts/             regenerate examples and sample reports
+docs/sample_reports/ example validation reports
+tests/               pytest suite (OpenAI and Streamlit are stood in for)
 ```
 
 All data in this repository is synthetic.
