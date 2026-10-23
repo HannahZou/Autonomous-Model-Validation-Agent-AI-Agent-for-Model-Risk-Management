@@ -2,7 +2,8 @@
 
 With ``inject_issues=True`` the series contains: a duplicated date, a two-week
 gap in the history, a run of stale (unchanged) prices, an unadjusted 2-for-1
-stock split, a zero price and a few missing values.
+stock split, a zero price and a few missing values (Data Quality), plus a
+volatility regime shift in the final year (Assumptions and Backtesting).
 """
 
 from __future__ import annotations
@@ -35,14 +36,18 @@ def make_price_data(n_days: int = 1000, seed: int = 11, inject_issues: bool = Tr
     # (scale floored so tails stay realistic: no 25% daily moves in FX or rates)
     scale = np.clip(np.sqrt(rng.chisquare(5, n_days) / 5), 0.4, None)[:, None]
     rets = z / scale
+    if inject_issues:
+        # Volatility regime shift: a stress episode makes the last 60 days ~3x as volatile,
+        # so a 250-day historical VaR lags behind and exceptions cluster.
+        rets[-60:] *= 3.0
     start = np.array([420.0, 380.0, 98.0, 1.08])
     prices = start * np.exp(np.cumsum(rets, axis=0))
     df = pd.DataFrame(prices.round(4), columns=ASSETS)
     df.insert(0, "date", dates)
 
     if inject_issues:
-        # Unadjusted 2-for-1 split in EQ_US from day 600
-        df.loc[600:, "EQ_US"] = (df.loc[600:, "EQ_US"] / 2).round(4)
+        # Unadjusted 2-for-1 split in EQ_US from day 250
+        df.loc[250:, "EQ_US"] = (df.loc[250:, "EQ_US"] / 2).round(4)
         # Stale prices: FX feed froze for 9 days
         df.loc[701:709, "FX_EURUSD"] = df.loc[700, "FX_EURUSD"]
         # Zero price and some missing values

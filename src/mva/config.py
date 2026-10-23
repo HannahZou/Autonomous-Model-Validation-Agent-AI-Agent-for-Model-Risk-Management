@@ -41,12 +41,43 @@ class DataQualityThresholds:
 
 
 @dataclass(frozen=True)
+class StatTestThresholds:
+    """Shared significance levels. Rejection at 1% is a Medium (or High) finding,
+    rejection only at 5% is Low, so a well-specified model rarely trips a material finding."""
+
+    p_material: float = 0.01
+    p_low: float = 0.05
+
+
+@dataclass(frozen=True)
+class AssumptionThresholds(StatTestThresholds):
+    vif_high: float = 10.0
+    vif_medium: float = 5.0
+    # Independent re-estimation must reproduce the developer's PDs within this tolerance
+    replication_tolerance: float = 0.01
+    # Volatility of the latest 60 days relative to the rest of the VaR window
+    regime_window: int = 60
+    regime_ratio: float = 1.5
+    ljung_box_lags: int = 10
+
+
+@dataclass(frozen=True)
+class BacktestThresholds(StatTestThresholds):
+    auc_high: float = 0.60
+    auc_medium: float = 0.70
+    auc_drop: float = 0.05
+    traffic_light_days: int = 250
+
+
+@dataclass(frozen=True)
 class Settings:
     openai_api_key: str | None
     openai_model: str
     use_llm: bool
     runs_dir: Path
     dq: DataQualityThresholds = field(default_factory=DataQualityThresholds)
+    assumptions: AssumptionThresholds = field(default_factory=AssumptionThresholds)
+    backtest: BacktestThresholds = field(default_factory=BacktestThresholds)
 
     @property
     def llm_enabled(self) -> bool:

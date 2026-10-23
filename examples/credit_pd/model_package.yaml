@@ -17,6 +17,7 @@ documentation:
 data:
   train: train.csv
   test: test.csv
+model: model.json
 target: default_flag
 id_column: loan_id
 features:
@@ -28,6 +29,7 @@ features:
 - delinquencies_2y
 - months_employed
 - loan_amount
+- utilization_6m_avg
 - recovery_amount
 feature_ranges:
   age:

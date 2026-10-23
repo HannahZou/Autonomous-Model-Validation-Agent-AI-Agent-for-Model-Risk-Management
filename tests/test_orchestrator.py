@@ -15,8 +15,14 @@ def test_run_writes_results_summary_and_audit(settings, credit_pkg):
     summary = (out_dir / "summary.md").read_text()
     assert "Suspected target leakage" in summary
 
-    events = [json.loads(line)["event"] for line in (out_dir / "audit.jsonl").read_text().splitlines()]
-    assert events == ["run_started", "agent_started", "agent_finished", "run_finished"]
+    events = [json.loads(line) for line in (out_dir / "audit.jsonl").read_text().splitlines()]
+    assert [e["event"] for e in events] == (
+        ["run_started"] + ["agent_started", "agent_finished"] * 3 + ["run_finished"]
+    )
+    finished = [e["agent"] for e in events if e["event"] == "agent_finished"]
+    assert finished == ["Data Quality", "Assumptions", "Backtesting"]
+    assert all(e["status"] == "completed" for e in events if e["event"] == "agent_finished")
+    assert {f.finding_id[:2] for f in run.findings} == {"DQ", "AS", "BT"}
 
 
 def test_cli_validate_both_types(settings, credit_pkg, market_pkg, capsys):

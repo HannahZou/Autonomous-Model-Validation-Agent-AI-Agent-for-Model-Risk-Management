@@ -1,18 +1,29 @@
-"""Synthetic retail-loan data for a credit PD model.
+"""Synthetic retail-loan data and a developer's PD model for it.
 
-With ``inject_issues=True`` the data carries realistic defects that a validator
-should catch: missing income, duplicate records, impossible ages, extreme
-income outliers, a drifted feature in the validation sample, and a feature
-that leaks the outcome (recovery amount is only known after default).
+With ``inject_issues=True`` the package carries realistic defects that a
+validator should catch.
+
+Data (Data Quality agent): missing income, duplicate records, impossible ages,
+extreme income outliers, a drifted feature in the validation sample, and a
+feature that leaks the outcome (recovery amount is only known after default).
+
+Model (Assumptions and Backtesting agents): the developer added a 6-month
+average utilisation that is almost a copy of current utilisation
+(multicollinearity), and the validation sample comes from a worse vintage
+than the development sample, so the model under-predicts defaults there.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
+
+from mva.models.credit import CreditModelSpec
+from mva.stats import fit_logit
 
 FEATURES = [
     "age",
@@ -25,9 +36,18 @@ FEATURES = [
     "loan_amount",
 ]
 TARGET = "default_flag"
+EXPECTED_SIGNS = {
+    "age": "-",
+    "annual_income": "-",
+    "debt_to_income": "+",
+    "credit_utilization": "+",
+    "utilization_6m_avg": "+",
+    "delinquencies_2y": "+",
+    "months_employed": "-",
+}
 
 
-def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0) -> pd.DataFrame:
+def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0, intercept_shift: float = 0.0) -> pd.DataFrame:
     age = rng.integers(21, 75, n).astype(float)
     income = np.round(rng.lognormal(mean=11.0, sigma=0.5, size=n), -2)
     dti = np.clip(rng.normal(0.32, 0.12, n), 0.0, 1.2)
@@ -36,18 +56,19 @@ def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0) ->
     delinq = rng.poisson(0.3, n).astype(float)
     employed = np.clip(rng.gamma(2.0, 30.0, n), 0, 480).round()
     loan = np.round(rng.lognormal(mean=9.6, sigma=0.6, size=n), -2)
+    util_6m = np.clip(util + rng.normal(0, 0.03, n), 0.0, 1.0)
 
     logit = (
         -3.0
-        + 2.2 * (dti - 0.32)
-        + 2.8 * (util - 0.33)
-        + 0.55 * delinq
-        - 0.004 * (employed - 60)
-        - 0.6 * (np.log(income) - 11.0)
-        - 0.01 * (age - 45)
+        + intercept_shift
+        + 3.0 * (dti - 0.32)
+        + 4.0 * (util - 0.33)
+        + 0.70 * delinq
+        - 0.006 * (employed - 60)
+        - 0.8 * (np.log(income) - 11.0)
+        - 0.015 * (age - 45)
     )
-    pd_true = 1.0 / (1.0 + np.exp(-logit))
-    default = rng.binomial(1, pd_true)
+    default = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit)))
 
     return pd.DataFrame(
         {
@@ -56,6 +77,7 @@ def _sample(n: int, rng: np.random.Generator, utilization_shift: float = 0.0) ->
             "annual_income": income,
             "debt_to_income": dti.round(4),
             "credit_utilization": util.round(4),
+            "utilization_6m_avg": util_6m.round(4),
             "num_open_accounts": open_acc,
             "delinquencies_2y": delinq,
             "months_employed": employed,
@@ -70,29 +92,63 @@ def make_credit_data(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rng = np.random.default_rng(seed)
     train = _sample(n_train, rng)
-    test = _sample(n_test, rng, utilization_shift=0.18 if inject_issues else 0.0)
+    test = _sample(
+        n_test,
+        rng,
+        utilization_shift=0.10 if inject_issues else 0.0,
+        intercept_shift=0.35 if inject_issues else 0.0,  # worse vintage
+    )
     test["loan_id"] += n_train
 
-    if inject_issues:
-        # 1. Missing income (8% of development sample)
-        idx = rng.choice(n_train, int(0.08 * n_train), replace=False)
-        train.loc[idx, "annual_income"] = np.nan
-        # 2. Duplicate records (2%)
-        dup = train.sample(frac=0.02, random_state=seed)
-        train = pd.concat([train, dup], ignore_index=True)
-        # 3. Impossible ages
-        bad = rng.choice(len(train), 12, replace=False)
-        train.loc[bad[:6], "age"] = 150
-        train.loc[bad[6:], "age"] = -1
-        # 4. Extreme income outliers (data entry errors)
-        out = rng.choice(len(train), 120, replace=False)
-        train.loc[out, "annual_income"] = 99_999_999
-        # 5. Leakage: recovery amount is only observed after a default
-        for df in (train, test):
-            df["recovery_amount"] = np.where(
-                df[TARGET] == 1, np.round(df["loan_amount"] * rng.uniform(0.2, 0.6, len(df)), -1), 0.0
-            )
+    if not inject_issues:
+        return train.drop(columns="utilization_6m_avg"), test.drop(columns="utilization_6m_avg")
+
+    # 1. Missing income (8% of development sample)
+    idx = rng.choice(n_train, int(0.08 * n_train), replace=False)
+    train.loc[idx, "annual_income"] = np.nan
+    # 2. Duplicate records (2%)
+    dup = train.sample(frac=0.02, random_state=seed)
+    train = pd.concat([train, dup], ignore_index=True)
+    # 3. Impossible ages
+    bad = rng.choice(len(train), 12, replace=False)
+    train.loc[bad[:6], "age"] = 150
+    train.loc[bad[6:], "age"] = -1
+    # 4. Extreme income outliers (data entry errors)
+    out = rng.choice(len(train), 120, replace=False)
+    train.loc[out, "annual_income"] = 99_999_999
+    # 5. Leakage: recovery amount is only observed after a default
+    for df in (train, test):
+        df["recovery_amount"] = np.where(
+            df[TARGET] == 1, np.round(df["loan_amount"] * rng.uniform(0.2, 0.6, len(df)), -1), 0.0
+        )
     return train, test
+
+
+def fit_developer_model(train: pd.DataFrame, inject_issues: bool = True) -> CreditModelSpec:
+    """What the model developer delivered: a logistic regression fitted on the development sample."""
+    features = [
+        "age", "annual_income", "debt_to_income", "credit_utilization",
+        "num_open_accounts", "delinquencies_2y", "months_employed", "loan_amount",
+    ]
+    if inject_issues:
+        features.insert(4, "utilization_6m_avg")
+    income = pd.to_numeric(train["annual_income"], errors="coerce")
+    prelim = CreditModelSpec(
+        intercept=0.0,
+        coefficients={f: 0.0 for f in features},
+        imputation={"annual_income": float(income.median())},
+        caps={"annual_income": (0.0, float(income.quantile(0.99))), "age": (18.0, 100.0)},
+        transforms={"annual_income": "log"},
+        expected_signs={f: s for f, s in EXPECTED_SIGNS.items() if f in features},
+    )
+    X = prelim.design_matrix(train)
+    res = fit_logit(X.to_numpy(), train[TARGET].to_numpy())
+    return prelim.model_copy(
+        update={
+            "intercept": round(res.intercept, 6),
+            "coefficients": {f: round(float(c), 8) for f, c in zip(features, res.coef)},
+        }
+    )
 
 
 def write_credit_package(root: str | Path, seed: int = 7, inject_issues: bool = True) -> Path:
@@ -101,8 +157,10 @@ def write_credit_package(root: str | Path, seed: int = 7, inject_issues: bool = 
     train, test = make_credit_data(seed=seed, inject_issues=inject_issues)
     train.to_csv(root / "train.csv", index=False)
     test.to_csv(root / "test.csv", index=False)
+    model = fit_developer_model(train, inject_issues=inject_issues)
+    (root / "model.json").write_text(json.dumps(model.model_dump(), indent=2))
 
-    features = FEATURES + (["recovery_amount"] if inject_issues else [])
+    features = FEATURES + (["utilization_6m_avg", "recovery_amount"] if inject_issues else [])
     manifest = {
         "model_id": "CR-PD-001",
         "name": "Retail Unsecured Loan PD Scorecard",
@@ -121,6 +179,7 @@ def write_credit_package(root: str | Path, seed: int = 7, inject_issues: bool = 
             "limitations": ["Not validated for small-business or secured lending."],
         },
         "data": {"train": "train.csv", "test": "test.csv"},
+        "model": "model.json",
         "target": TARGET,
         "id_column": "loan_id",
         "features": features,

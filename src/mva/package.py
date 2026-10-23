@@ -12,9 +12,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
+import json
+
 import pandas as pd
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
+
+from mva.models.credit import CreditModelSpec
 
 MANIFEST_NAME = "model_package.yaml"
 
@@ -42,6 +46,8 @@ class CreditPDSpec(BaseModel):
     target: str
     features: list[str] = Field(min_length=1)
     id_column: str | None = None
+    # Path to the model specification (model.json) relative to the package root
+    model: str | None = None
     # Declared valid ranges, e.g. {"age": [18, 100]}
     feature_ranges: dict[str, tuple[float, float]] = Field(default_factory=dict)
 
@@ -105,7 +111,7 @@ class ModelPackage:
         except yaml.YAMLError as exc:
             raise PackageError(f"Manifest is not valid YAML: {exc}") from exc
         # Allow the spec fields to sit at top level of the YAML for readability.
-        spec_keys = {"model_type", "data", "target", "features", "id_column",
+        spec_keys = {"model_type", "data", "target", "features", "id_column", "model",
                      "feature_ranges", "assets", "weights", "var"}
         raw = dict(raw)
         raw["spec"] = {k: raw.pop(k) for k in list(raw) if k in spec_keys}
@@ -129,6 +135,25 @@ class ModelPackage:
         if not path.exists():
             raise PackageError(f"Data file referenced by manifest not found: {rel}")
         return pd.read_csv(path, **kwargs)
+
+    def load_credit_model(self) -> CreditModelSpec:
+        """Load and check the PD model specification referenced by the manifest."""
+        spec = self.spec
+        if not isinstance(spec, CreditPDSpec):
+            raise PackageError("only credit_pd packages have a credit model")
+        if spec.model is None:
+            raise PackageError("manifest has no 'model' entry; add model.json to validate the model itself")
+        path = self.root / spec.model
+        if not path.exists():
+            raise PackageError(f"Model file referenced by manifest not found: {spec.model}")
+        try:
+            model = CreditModelSpec.model_validate(json.loads(path.read_text()))
+        except (ValueError, ValidationError) as exc:
+            raise PackageError(f"Model specification is invalid: {exc}") from exc
+        unknown = sorted(set(model.features) - set(spec.features))
+        if unknown:
+            raise PackageError(f"model uses features not declared in the manifest: {unknown}")
+        return model
 
     def load_data(self) -> dict[str, pd.DataFrame]:
         """Return the package's datasets, keyed by role ("train", "test" or "prices")."""
